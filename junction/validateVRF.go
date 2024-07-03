@@ -70,6 +70,14 @@ func ValidateVRF(addr string) bool {
 		return false
 	}
 
+	// Get the current account sequence number
+	accountInfo, err := accountClient.Account(newTempAddr)
+	if err != nil {
+		logs.Log.Error("Failed to get account info: " + err.Error())
+		return false
+	}
+	sequence := accountInfo.GetSequence()
+
 	currentPodState := shared.GetPodState()
 	podNumber := currentPodState.LatestPodHeight
 	msg := types.MsgValidateVrf{
@@ -92,7 +100,16 @@ func ValidateVRF(addr string) bool {
 	}
 
 	for {
-		txRes, errTxRes := accountClient.BroadcastTx(ctx, newTempAccount, &msg)
+		// Use the current sequence number for the transaction
+		txBuilder, err := accountClient.BuildUnsignedTx(msg)
+		if err != nil {
+			logs.Log.Error("Failed to build unsigned transaction: " + err.Error())
+			return false
+		}
+		txBuilder.SetSequence(sequence)
+
+		// Sign and broadcast the transaction
+		txRes, errTxRes := accountClient.BroadcastTx(ctx, newTempAccount, txBuilder)
 		if errTxRes != nil {
 			errStr := errTxRes.Error()
 			if strings.Contains(errStr, VRFValidatedErrorContains) {
@@ -100,18 +117,23 @@ func ValidateVRF(addr string) bool {
 				return true
 			} else {
 				log.Error().Str("module", "junction").Str("Error", errStr).Msg("Error in ValidateVRF transaction")
-				// retry transaction
+				// Retry transaction
 				log.Debug().Str("module", "junction").Msg("Retrying ValidateVRF transaction after 10 seconds..")
 				time.Sleep(10 * time.Second)
-				//return false
+				// Refresh sequence number
+				accountInfo, err = accountClient.Account(newTempAddr)
+				if err != nil {
+					logs.Log.Error("Failed to get account info: " + err.Error())
+					return false
+				}
+				sequence = accountInfo.GetSequence()
 			}
 		} else {
-			// update VRN verified hash
+			// Update VRN verified hash
 			currentPodState.VRFValidationTxHash = txRes.TxHash
 			shared.SetPodState(currentPodState)
 			log.Info().Str("module", "junction").Str("txHash", txRes.TxHash).Msg("VRF Validated Tx Success")
 			return true
 		}
 	}
-
 }
