@@ -1,20 +1,3 @@
-package junction
-
-import (
-	"context"
-	"fmt"
-	"github.com/airchains-network/decentralized-sequencer/junction/types"
-	logs "github.com/airchains-network/decentralized-sequencer/log"
-	"github.com/airchains-network/decentralized-sequencer/node/shared"
-	utilis "github.com/airchains-network/decentralized-sequencer/utils"
-	"github.com/ignite/cli/v28/ignite/pkg/cosmosaccount"
-	"github.com/ignite/cli/v28/ignite/pkg/cosmosclient"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
-	"os"
-	"time"
-)
-
 func SubmitCurrentPod() (success bool) {
 	zerolog.TimeFieldFormat = time.RFC3339
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
@@ -28,12 +11,10 @@ func SubmitCurrentPod() (success bool) {
 
 	podNumber := currentPodState.LatestPodHeight
 
-	// get latest pod hash
 	LatestPodStatusHash := currentPodState.LatestPodHash
 	var LatestPodStatusHashStr string
 	LatestPodStatusHashStr = string(LatestPodStatusHash)
 
-	// previous pod hash
 	PreviousPodHash := currentPodState.PreviousPodHash
 	var PreviousPodStatusHashStr string
 	if PreviousPodHash == nil {
@@ -42,7 +23,6 @@ func SubmitCurrentPod() (success bool) {
 		PreviousPodStatusHashStr = string(PreviousPodHash)
 	}
 
-	// get witness
 	witnessByte := currentPodState.LatestPublicWitness
 
 	registry, err := cosmosaccount.New(cosmosaccount.WithHome(accountPath))
@@ -63,11 +43,18 @@ func SubmitCurrentPod() (success bool) {
 		return false
 	}
 
+	// Get the current account nonce (sequence)
+	accountSequence, err := AccountNounceCheck(newTempAddr, jsonRpc)
+	if err != nil {
+		logs.Log.Error(fmt.Sprintf("Error getting account nonce: %v", err))
+		return false
+	}
+
 	ctx := context.Background()
 	gas := utilis.GenerateRandomWithFavour(100, 300, [2]int{120, 250}, 0.7)
 	gasFees := fmt.Sprintf("%damf", gas)
 	log.Info().Str("module", "junction").Str("Gas Fees Used to Validate VRF", gasFees)
-	accountClient, err := cosmosclient.New(ctx, cosmosclient.WithAddressPrefix(addressPrefix), cosmosclient.WithNodeAddress(jsonRpc), cosmosclient.WithHome(accountPath), cosmosclient.WithGas("auto"), cosmosclient.WithFees(gasFees))
+	accountClient, err := cosmosclient.New(ctx, cosmosclient.WithAddressPrefix(addressPrefix), cosmosclient.WithNodeAddress(jsonRpc), cosmosclient.WithHome(accountPath), cosmosclient.WithGas("auto"), cosmosclient.WithFees(gasFees), cosmosclient.WithSequence(accountSequence))
 	if err != nil {
 		logs.Log.Error("Switchyard client connection error")
 		logs.Log.Error(err.Error())
@@ -83,15 +70,13 @@ func SubmitCurrentPod() (success bool) {
 		StationId:              stationId,
 		PodNumber:              podNumber,
 		MerkleRootHash:         LatestPodStatusHashStr,
-		PreviousMerkleRootHash: PreviousPodStatusHashStr, // bytes.NewBuffer(pMrh).String(), // PreviousPodStatusHashStr,
+		PreviousMerkleRootHash: PreviousPodStatusHashStr,
 		PublicWitness:          witnessByte,
 		Timestamp:              currentTime,
 	}
 
-	// check if pod is already submitted
 	podDetails := QueryPod(podNumber)
 	if podDetails != nil {
-		// pod already submitted
 		log.Debug().Str("module", "junction").Msg("Pod already submitted")
 		return true
 	}
@@ -104,9 +89,7 @@ func SubmitCurrentPod() (success bool) {
 
 			log.Debug().Str("module", "junction").Msg("Retrying SubmitPod transaction after 10 seconds..")
 			time.Sleep(10 * time.Second)
-			//return false
 		} else {
-			// update txHash of submit pod in pod state
 			currentPodState.InitPodTxHash = txRes.TxHash
 			shared.SetPodState(currentPodState)
 			log.Info().Str("module", "junction").Str("txHash", txRes.TxHash).Msg("Pod submitted successfully")
